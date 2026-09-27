@@ -5,7 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-const VERSION = '0.1.1';
+const VERSION = '0.1.2';
 const PNPM_VERSION = '9.15.1';
 const ROOT = path.dirname(fileURLToPath(import.meta.url));
 const CONFIG = {
@@ -183,13 +183,15 @@ function prepareSources(workspace, mcpExtensionId) {
   return { vendorDir, statePath };
 }
 
-function stageMcpInjectionHelpers(mcpDir) {
+function stageMcpStaticAssets(mcpDir) {
   const extensionDir = path.join(mcpDir, 'app', 'chrome-extension');
-  const source = path.join(extensionDir, 'inject-scripts');
-  const target = path.join(extensionDir, 'public', 'inject-scripts');
-  if (!existsSync(source)) throw new Error(`mcp-chrome injection helpers not found: ${source}`);
-  cpSync(source, target, { recursive: true });
-  console.log('Staged internal mcp-chrome injection helpers as extension public assets.');
+  for (const directory of ['inject-scripts', 'workers', '_locales']) {
+    const source = path.join(extensionDir, directory);
+    const target = path.join(extensionDir, 'public', directory);
+    if (!existsSync(source)) throw new Error(`mcp-chrome static assets not found: ${source}`);
+    cpSync(source, target, { recursive: true });
+  }
+  console.log('Staged mcp-chrome helpers, workers, and locale files as WXT public assets.');
 }
 
 function buildSources(vendorDir, extensionKey, mcpExtensionId) {
@@ -205,7 +207,7 @@ function buildSources(vendorDir, extensionKey, mcpExtensionId) {
   const mcpDir = path.join(vendorDir, CONFIG.mcpChrome.name);
   const mcpEnv = { ...ciEnv, CHROME_EXTENSION_KEY: extensionKey };
   run('pnpm', ['install', '--frozen-lockfile', '--ignore-scripts'], { cwd: mcpDir, env: mcpEnv });
-  stageMcpInjectionHelpers(mcpDir);
+  stageMcpStaticAssets(mcpDir);
   run('pnpm', ['build'], { cwd: mcpDir, env: mcpEnv });
   run('pnpm', ['--filter', 'mcp-chrome-bridge', 'rebuild', 'better-sqlite3'], { cwd: mcpDir, env: mcpEnv });
 
@@ -215,9 +217,16 @@ function buildSources(vendorDir, extensionKey, mcpExtensionId) {
   if (!existsSync(mcpManifestPath) || !existsSync(nativeCliPath)) {
     throw new Error('mcp-chrome build is incomplete; expected the unpacked extension and native CLI.');
   }
-  for (const file of ['click-helper.js', 'fill-helper.js', 'element-picker.js']) {
-    const helperPath = path.join(mcpExtensionDir, 'inject-scripts', file);
-    if (!existsSync(helperPath)) throw new Error(`mcp-chrome build omitted required browser helper: ${helperPath}`);
+  const requiredAssets = [
+    'inject-scripts/click-helper.js',
+    'inject-scripts/fill-helper.js',
+    'inject-scripts/element-picker.js',
+    'workers/ort-wasm-simd-threaded.wasm',
+    '_locales/en/messages.json',
+  ];
+  for (const asset of requiredAssets) {
+    const assetPath = path.join(mcpExtensionDir, asset);
+    if (!existsSync(assetPath)) throw new Error(`mcp-chrome build omitted required extension asset: ${assetPath}`);
   }
   const manifest = JSON.parse(readFileSync(mcpManifestPath, 'utf8'));
   if (manifest.key !== extensionKey) throw new Error('Built mcp-chrome manifest does not contain the pinned public key; extension ID would be unstable.');

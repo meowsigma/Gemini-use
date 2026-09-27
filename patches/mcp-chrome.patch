@@ -274,10 +274,17 @@ index 88e3f6e..867d9a3 100644
  
        if (!tab.id) {
 diff --git a/app/chrome-extension/wxt.config.ts b/app/chrome-extension/wxt.config.ts
-index 7f2fae4..3099689 100644
+index 7f2fae4..fda72bb 100644
 --- a/app/chrome-extension/wxt.config.ts
 +++ b/app/chrome-extension/wxt.config.ts
-@@ -102,7 +102,7 @@ export default defineConfig({
+@@ -1,6 +1,5 @@
+ import { defineConfig } from 'wxt';
+ import tailwindcss from '@tailwindcss/vite';
+-import { viteStaticCopy } from 'vite-plugin-static-copy';
+ import { config } from 'dotenv';
+ import { resolve } from 'path';
+ import Icons from 'unplugin-icons/vite';
+@@ -102,7 +101,7 @@ export default defineConfig({
          resources: [
            '/models/*', // 允许访问 public/models/ 下的所有文件
            '/workers/*', // 允许访问 workers 文件
@@ -286,21 +293,38 @@ index 7f2fae4..3099689 100644
          ],
          matches: ['<all_urls>'],
        },
-@@ -132,13 +132,9 @@ export default defineConfig({
+@@ -131,31 +130,6 @@ export default defineConfig({
+         resolvers: [IconsResolver({ prefix: 'i', enabledCollections: ['lucide', 'mdi', 'ri'] })],
        }) as any,
        Icons({ compiler: 'vue3', autoInstall: false }) as any,
-       // Ensure static assets are available as early as possible to avoid race conditions in dev
+-      // Ensure static assets are available as early as possible to avoid race conditions in dev
 -      // Copy workers/_locales/inject-scripts into the build output before other steps
-+      // Copy worker and locale assets into the build output.
-       viteStaticCopy({
-         targets: [
+-      viteStaticCopy({
+-        targets: [
 -          {
 -            src: 'inject-scripts/*.js',
 -            dest: 'inject-scripts',
 -          },
-           {
-             src: ['workers/*'],
-             dest: 'workers',
+-          {
+-            src: ['workers/*'],
+-            dest: 'workers',
+-          },
+-          {
+-            src: '_locales/**/*',
+-            dest: '_locales',
+-          },
+-        ],
+-        // Use writeBundle so outDir exists for dev and prod
+-        hook: 'writeBundle',
+-        // Enable watch so changes to these files are reflected during dev
+-        watch: {
+-          // Use default patterns inferred from targets; explicit true enables watching
+-          // Vite plugin will watch src patterns and re-copy on change
+-        } as any,
+-      }) as any,
+     ],
+     build: {
+       // 我们的构建产物需要兼容到es6
 diff --git a/app/native-server/src/mcp/mcp-server.ts b/app/native-server/src/mcp/mcp-server.ts
 index 2f2c3bd..208ff64 100644
 --- a/app/native-server/src/mcp/mcp-server.ts
