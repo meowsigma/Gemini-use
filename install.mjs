@@ -205,6 +205,10 @@ function buildSources(vendorDir, extensionKey, mcpExtensionId) {
   if (!existsSync(mcpManifestPath) || !existsSync(nativeCliPath)) {
     throw new Error('mcp-chrome build is incomplete; expected the unpacked extension and native CLI.');
   }
+  for (const file of ['click-helper.js', 'fill-helper.js', 'element-picker.js']) {
+    const helperPath = path.join(mcpExtensionDir, 'inject-scripts', file);
+    if (!existsSync(helperPath)) throw new Error(`mcp-chrome build omitted required browser helper: ${helperPath}`);
+  }
   const manifest = JSON.parse(readFileSync(mcpManifestPath, 'utf8'));
   if (manifest.key !== extensionKey) throw new Error('Built mcp-chrome manifest does not contain the pinned public key; extension ID would be unstable.');
   const actualId = extensionIdFromPublicKey(manifest.key);

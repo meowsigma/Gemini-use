@@ -273,6 +273,19 @@ index 88e3f6e..867d9a3 100644
        }
  
        if (!tab.id) {
+diff --git a/app/chrome-extension/wxt.config.ts b/app/chrome-extension/wxt.config.ts
+index 7f2fae4..abe31aa 100644
+--- a/app/chrome-extension/wxt.config.ts
++++ b/app/chrome-extension/wxt.config.ts
+@@ -102,7 +102,7 @@ export default defineConfig({
+         resources: [
+           '/models/*', // 允许访问 public/models/ 下的所有文件
+           '/workers/*', // 允许访问 workers 文件
+-          '/inject-scripts/*', // 允许内容脚本注入的助手文件
++          // inject-scripts are internal files executed by chrome.scripting, not fetched by web pages.
+         ],
+         matches: ['<all_urls>'],
+       },
 diff --git a/app/native-server/src/mcp/mcp-server.ts b/app/native-server/src/mcp/mcp-server.ts
 index 2f2c3bd..208ff64 100644
 --- a/app/native-server/src/mcp/mcp-server.ts

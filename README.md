@@ -66,7 +66,7 @@ The browser toolset supports page reading, click/double-click, typing and form f
 
 ## What the patches change
 
-The patch series stays in the two upstream projects and addresses only integration gaps found in end-to-end use: Streamable HTTP defaults/permissions and CORS, per-session MCP server instances, controller-tab-aware tab selection, target tab ID and screenshot forwarding, Gemini result/hidden-tab handling, upload submission timing, download result lookup, and Gemini’s string-serialized tab IDs/boolean parameters. Upstream tools implement the actual browser actions.
+The patch series stays in the two upstream projects and addresses only integration gaps found in end-to-end use: Streamable HTTP defaults/permissions and CORS, per-session MCP server instances, controller-tab-aware tab selection, target tab ID and screenshot forwarding, Gemini result/hidden-tab handling, upload submission timing, download result lookup, Gemini’s string-serialized tab IDs/boolean parameters, a Windows-safe workspace build filter, and keeping internal injection scripts out of web-accessible resources. Upstream tools implement the actual browser actions.
 
 Upstream revisions are pinned in `install.mjs`; review/update those pins and the patch series together when upstream changes.
 
