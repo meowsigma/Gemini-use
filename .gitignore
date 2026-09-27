@@ -1,0 +1,16 @@
+# Installer outputs and cloned upstream projects
+vendor/
+.install-workspace/
+*.log
+node_modules/
+
+# Local overrides / secrets
+.env
+.env.*
+!.env.example
+
+# OS/editor files
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/

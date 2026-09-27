@@ -1,0 +1,2 @@
+# Unified diff context lines intentionally end in one space; those spaces are patch syntax.
+patches/*.patch whitespace=-blank-at-eol,-blank-at-eof

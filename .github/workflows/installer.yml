@@ -1,0 +1,23 @@
+name: installer
+on:
+  push:
+  pull_request:
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22.12.0'
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9.15.1
+      - name: Test installer helpers
+        run: node --test
+      - name: Build and register pinned upstream projects
+        run: node install.mjs --workspace "${{ runner.temp }}/gemini-use-test" --no-open

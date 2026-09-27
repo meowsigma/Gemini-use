@@ -1,0 +1,326 @@
+diff --git a/app/chrome-extension/entrypoints/background/tools/base-browser.ts b/app/chrome-extension/entrypoints/background/tools/base-browser.ts
+index 1e0bc60..59eaab3 100644
+--- a/app/chrome-extension/entrypoints/background/tools/base-browser.ts
++++ b/app/chrome-extension/entrypoints/background/tools/base-browser.ts
+@@ -4,6 +4,30 @@ import { TIMEOUTS, ERROR_MESSAGES } from '@/common/constants';
+ 
+ const PING_TIMEOUT_MS = 300;
+ 
++/**
++ * Tabs hosting the web-chat "brain" (e.g. Gemini driven via MCP SuperAssistant).
++ * Tools that default to "the active tab" skip these so the agent never acts on,
++ * navigates away from, or hides its own chat.
++ */
++const CONTROLLER_HOSTS = ['gemini.google.com'];
++
++export function isControllerTab(tab?: chrome.tabs.Tab | null): boolean {
++  if (!tab?.url) return false;
++  try {
++    return CONTROLLER_HOSTS.includes(new URL(tab.url).hostname);
++  } catch {
++    return false;
++  }
++}
++
++/** Most recently used non-controller tab (the page the user/agent is working on). */
++export async function getLastWorkTab(): Promise<chrome.tabs.Tab | null> {
++  const tabs = await chrome.tabs.query({ windowType: 'normal' });
++  const candidates = tabs.filter((t) => t.id && !isControllerTab(t));
++  candidates.sort((a, b) => ((b as any).lastAccessed || 0) - ((a as any).lastAccessed || 0));
++  return candidates[0] || null;
++}
++
+ /**
+  * Base class for browser tool executors
+  */
+@@ -114,10 +138,12 @@ export abstract class BaseBrowserToolExecutor implements ToolExecutor {
+   /**
+    * Try to get an existing tab by id. Returns null when not found.
+    */
+-  protected async tryGetTab(tabId?: number): Promise<chrome.tabs.Tab | null> {
+-    if (typeof tabId !== 'number') return null;
++  protected async tryGetTab(tabId?: number | string): Promise<chrome.tabs.Tab | null> {
++    if (tabId === undefined || tabId === null || tabId === '') return null;
++    const id = Number(tabId);
++    if (!Number.isInteger(id)) return null;
+     try {
+-      return await chrome.tabs.get(tabId);
++      return await chrome.tabs.get(id);
+     } catch {
+       return null;
+     }
+@@ -127,7 +153,8 @@ export abstract class BaseBrowserToolExecutor implements ToolExecutor {
+    * Get the active tab in the current window. Throws when not found.
+    */
+   protected async getActiveTabOrThrow(): Promise<chrome.tabs.Tab> {
+-    const [active] = await chrome.tabs.query({ active: true, currentWindow: true });
++    let [active] = await chrome.tabs.query({ active: true, currentWindow: true });
++    if (active && isControllerTab(active)) active = (await getLastWorkTab()) as chrome.tabs.Tab;
+     if (!active || !active.id) throw new Error('Active tab not found');
+     return active;
+   }
+@@ -153,13 +180,20 @@ export abstract class BaseBrowserToolExecutor implements ToolExecutor {
+   /**
+    * Get the active tab. When windowId provided, search within that window; otherwise currentWindow.
+    */
+-  protected async getActiveTabInWindow(windowId?: number): Promise<chrome.tabs.Tab | null> {
+-    if (typeof windowId === 'number') {
+-      const tabs = await chrome.tabs.query({ active: true, windowId });
++  protected async getActiveTabInWindow(
++    windowId?: number | string,
++  ): Promise<chrome.tabs.Tab | null> {
++    if (windowId !== undefined && windowId !== null && windowId !== '') {
++      const id = Number(windowId);
++      if (!Number.isInteger(id)) return null;
++      const tabs = await chrome.tabs.query({ active: true, windowId: id });
+       return tabs && tabs[0] ? tabs[0] : null;
+     }
+     const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
+-    return tabs && tabs[0] ? tabs[0] : null;
++    const active = tabs && tabs[0] ? tabs[0] : null;
++    // Chat-driven agent mode: never default to the AI chat tab that is issuing commands.
++    if (active && isControllerTab(active)) return await getLastWorkTab();
++    return active;
+   }
+ 
+   /**
+diff --git a/app/chrome-extension/entrypoints/background/tools/browser/common.ts b/app/chrome-extension/entrypoints/background/tools/browser/common.ts
+index 7cd9e20..eb1eeff 100644
+--- a/app/chrome-extension/entrypoints/background/tools/browser/common.ts
++++ b/app/chrome-extension/entrypoints/background/tools/browser/common.ts
+@@ -1,5 +1,5 @@
+ import { createErrorResponse, ToolResult } from '@/common/tool-handler';
+-import { BaseBrowserToolExecutor } from '../base-browser';
++import { BaseBrowserToolExecutor, getLastWorkTab, isControllerTab } from '../base-browser';
+ import { TOOL_NAMES } from 'chrome-mcp-shared';
+ import { captureFrameOnAction, isAutoCaptureActive } from './gif-recorder';
+ 
+@@ -342,6 +342,20 @@ class NavigateTool extends BaseBrowserToolExecutor {
+         }
+         if (!targetWindow) {
+           targetWindow = await chrome.windows.getLastFocused({ populate: false });
++          // Don't bury the controlling AI chat tab under a new tab: open next to the
++          // current work tab instead, or in a separate window if there is none.
++          const [focusedActive] = targetWindow?.id
++            ? await chrome.tabs.query({ active: true, windowId: targetWindow.id })
++            : [];
++          if (isControllerTab(focusedActive)) {
++            // Use the work tab's window only if it's a different window; otherwise open a
++            // separate window so the chat stays visible (hidden tabs pause rendering).
++            const work = await getLastWorkTab();
++            targetWindow =
++              work && work.windowId !== targetWindow?.id
++                ? await chrome.windows.get(work.windowId)
++                : null;
++          }
+         }
+ 
+         if (targetWindow && targetWindow.id !== undefined) {
+@@ -635,7 +649,11 @@ class SwitchTabTool extends BaseBrowserToolExecutor {
+   name = TOOL_NAMES.BROWSER.SWITCH_TAB;
+ 
+   async execute(args: SwitchTabToolParams): Promise<ToolResult> {
+-    const { tabId, windowId } = args;
++    const tabId = Number(args?.tabId);
++    const windowId = args?.windowId === undefined ? undefined : Number(args.windowId);
++    if (!Number.isInteger(tabId) || (windowId !== undefined && !Number.isInteger(windowId))) {
++      return createErrorResponse('tabId and windowId must be valid integer IDs');
++    }
+ 
+     console.log(`Attempting to switch to tab ID: ${tabId} in window ID: ${windowId}`);
+ 
+diff --git a/app/chrome-extension/entrypoints/background/tools/browser/computer.ts b/app/chrome-extension/entrypoints/background/tools/browser/computer.ts
+index 2850739..d57e3bc 100644
+--- a/app/chrome-extension/entrypoints/background/tools/browser/computer.ts
++++ b/app/chrome-extension/entrypoints/background/tools/browser/computer.ts
+@@ -1283,6 +1283,9 @@ class ComputerTool extends BaseBrowserToolExecutor {
+           name: 'computer',
+           storeBase64: true,
+           fullPage: false,
++          savePng: false,
++          tabId: tab.id,
++          background: params.background,
+         });
+         return result;
+       }
+diff --git a/app/chrome-extension/entrypoints/background/tools/browser/download.ts b/app/chrome-extension/entrypoints/background/tools/browser/download.ts
+index 5477953..c49cab5 100644
+--- a/app/chrome-extension/entrypoints/background/tools/browser/download.ts
++++ b/app/chrome-extension/entrypoints/background/tools/browser/download.ts
+@@ -39,7 +39,10 @@ async function waitForDownload(opts: {
+   const { filenameContains, waitForComplete, timeoutMs } = opts;
+   return new Promise<any>((resolve, reject) => {
+     let timer: any = null;
++    let settled = false;
+     const onError = (err: any) => {
++      if (settled) return;
++      settled = true;
+       cleanup();
+       reject(err instanceof Error ? err : new Error(String(err)));
+     };
+@@ -60,6 +63,8 @@ async function waitForDownload(opts: {
+       return name.includes(filenameContains) || (item.url || '').includes(filenameContains);
+     };
+     const fulfill = async (item: chrome.downloads.DownloadItem) => {
++      if (settled) return;
++      settled = true;
+       // try to fill more details via downloads.search
+       try {
+         const [found] = await chrome.downloads.search({ id: item.id });
+@@ -109,12 +114,18 @@ async function waitForDownload(opts: {
+     chrome.downloads.onCreated.addListener(onCreated);
+     chrome.downloads.onChanged.addListener(onChanged);
+     timer = setTimeout(() => onError(new Error('Download wait timed out')), timeoutMs);
+-    // Try to find an already-running matching download
+     chrome.downloads
+-      .search({ state: waitForComplete ? 'in_progress' : undefined })
++      .search({})
+       .then((arr) => {
+-        const hit = (arr || []).find((d) => matches(d));
+-        if (hit && !waitForComplete) fulfill(hit);
++        const cutoff = Date.now() - 5 * 60 * 1000;
++        const recent = (arr || [])
++          .filter((d) => {
++            const started = d.startTime ? Date.parse(d.startTime) : 0;
++            return started >= cutoff;
++          })
++          .sort((a, b) => Date.parse(b.startTime || '') - Date.parse(a.startTime || ''));
++        const hit = recent.find((d) => matches(d) && (!waitForComplete || d.state === 'complete'));
++        if (hit) fulfill(hit);
+       })
+       .catch(() => {});
+   });
+diff --git a/app/chrome-extension/entrypoints/background/tools/browser/interaction.ts b/app/chrome-extension/entrypoints/background/tools/browser/interaction.ts
+index e977263..05abe4e 100644
+--- a/app/chrome-extension/entrypoints/background/tools/browser/interaction.ts
++++ b/app/chrome-extension/entrypoints/background/tools/browser/interaction.ts
+@@ -17,7 +17,7 @@ interface ClickToolParams {
+   waitForNavigation?: boolean; // Whether to wait for navigation to complete after click
+   timeout?: number; // Timeout in milliseconds for waiting for the element or navigation
+   frameId?: number; // Target frame for ref/selector resolution
+-  double?: boolean; // Perform double click when true
++  double?: boolean | string; // Gemini may serialize booleans as strings
+   button?: 'left' | 'right' | 'middle';
+   bubbles?: boolean;
+   cancelable?: boolean;
+@@ -108,7 +108,7 @@ class ClickTool extends BaseBrowserToolExecutor {
+           ref: finalRef,
+           waitForNavigation,
+           timeout,
+-          double: args.double === true,
++          double: args.double === true || String(args.double).toLowerCase() === 'true',
+           button,
+           bubbles,
+           cancelable,
+diff --git a/app/chrome-extension/entrypoints/background/tools/browser/javascript.ts b/app/chrome-extension/entrypoints/background/tools/browser/javascript.ts
+index ad342c1..a01c735 100644
+--- a/app/chrome-extension/entrypoints/background/tools/browser/javascript.ts
++++ b/app/chrome-extension/entrypoints/background/tools/browser/javascript.ts
+@@ -46,7 +46,7 @@ type ErrorKind =
+ 
+ interface JavaScriptToolParams {
+   code: string;
+-  tabId?: number;
++  tabId?: number | string;
+   timeoutMs?: number;
+   maxOutputBytes?: number;
+ }
+@@ -416,8 +416,11 @@ class JavaScriptTool extends BaseBrowserToolExecutor {
+       // Resolve target tab
+       const tab = await this.resolveTargetTab(args.tabId);
+       if (!tab) {
++        const requestedId = args.tabId === undefined ? undefined : Number(args.tabId);
+         return createErrorResponse(
+-          typeof args.tabId === 'number' ? `Tab not found: ${args.tabId}` : 'No active tab found',
++          requestedId !== undefined && Number.isInteger(requestedId)
++            ? `Tab not found: ${requestedId}`
++            : 'No active tab found',
+         );
+       }
+ 
+@@ -466,8 +469,8 @@ class JavaScriptTool extends BaseBrowserToolExecutor {
+     }
+   }
+ 
+-  private async resolveTargetTab(tabId?: number): Promise<chrome.tabs.Tab | null> {
+-    if (typeof tabId === 'number') {
++  private async resolveTargetTab(tabId?: number | string): Promise<chrome.tabs.Tab | null> {
++    if (tabId !== undefined && tabId !== null && tabId !== '') {
+       return this.tryGetTab(tabId);
+     }
+     try {
+diff --git a/app/chrome-extension/entrypoints/background/tools/browser/web-fetcher.ts b/app/chrome-extension/entrypoints/background/tools/browser/web-fetcher.ts
+index 88e3f6e..867d9a3 100644
+--- a/app/chrome-extension/entrypoints/background/tools/browser/web-fetcher.ts
++++ b/app/chrome-extension/entrypoints/background/tools/browser/web-fetcher.ts
+@@ -69,15 +69,12 @@ class WebFetcherTool extends BaseBrowserToolExecutor {
+           await new Promise((resolve) => setTimeout(resolve, 3000));
+         }
+       } else {
+-        // Use active tab (prefer specified window)
+-        const tabs =
+-          typeof windowId === 'number'
+-            ? await chrome.tabs.query({ active: true, windowId })
+-            : await chrome.tabs.query({ active: true, currentWindow: true });
+-        if (!tabs[0]) {
++        // Use active tab (prefer specified window; never the controlling AI chat tab)
++        const t = await this.getActiveTabInWindow(windowId);
++        if (!t) {
+           return createErrorResponse('No active tab found');
+         }
+-        tab = tabs[0];
++        tab = t;
+       }
+ 
+       if (!tab.id) {
+diff --git a/app/native-server/src/mcp/mcp-server.ts b/app/native-server/src/mcp/mcp-server.ts
+index 2f2c3bd..208ff64 100644
+--- a/app/native-server/src/mcp/mcp-server.ts
++++ b/app/native-server/src/mcp/mcp-server.ts
+@@ -3,10 +3,10 @@ import { setupTools } from './register-tools';
+ 
+ export let mcpServer: Server | null = null;
+ 
++// One Server per transport/session: a single shared Server throws
++// "Already connected to a transport" when a second client (or a reconnecting
++// client such as MCP SuperAssistant) initializes a new session.
+ export const getMcpServer = () => {
+-  if (mcpServer) {
+-    return mcpServer;
+-  }
+   mcpServer = new Server(
+     {
+       name: 'ChromeMcpServer',
+diff --git a/app/native-server/src/scripts/constant.ts b/app/native-server/src/scripts/constant.ts
+index 85daf45..a0af127 100644
+--- a/app/native-server/src/scripts/constant.ts
++++ b/app/native-server/src/scripts/constant.ts
+@@ -1,4 +1,5 @@
+ export const COMMAND_NAME = 'mcp-chrome-bridge';
+-export const EXTENSION_ID = 'hbdgbgagpkpjffpklnamcljpakneikee';
++export const EXTENSION_ID =
++  process.env.CHROME_MCP_EXTENSION_ID || 'hbdgbgagpkpjffpklnamcljpakneikee';
+ export const HOST_NAME = 'com.chromemcp.nativehost';
+ export const DESCRIPTION = 'Node.js Host for Browser Bridge Extension';
+diff --git a/app/native-server/src/server/index.ts b/app/native-server/src/server/index.ts
+index ae1e633..e97ab4b 100644
+--- a/app/native-server/src/server/index.ts
++++ b/app/native-server/src/server/index.ts
+@@ -84,6 +84,17 @@ export class Server {
+       },
+       methods: ['GET', 'POST', 'DELETE', 'OPTIONS'],
+       credentials: true,
++      exposedHeaders: ['mcp-session-id'],
++    });
++    // MCP transports write straight to reply.raw, bypassing Fastify's header pipeline.
++    // Copy the CORS headers set by @fastify/cors onto the raw response so browser-extension
++    // MCP clients (e.g. MCP SuperAssistant) can read streamable-HTTP/SSE responses.
++    this.fastify.addHook('preHandler', async (_request, reply) => {
++      for (const [key, value] of Object.entries(reply.getHeaders())) {
++        if (key.startsWith('access-control-') && value !== undefined) {
++          reply.raw.setHeader(key, value as string);
++        }
++      }
+     });
+   }
+ 

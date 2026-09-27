@@ -1,0 +1,317 @@
+diff --git a/.gitignore b/.gitignore
+index 8abad74..ccff6ca 100644
+--- a/.gitignore
++++ b/.gitignore
+@@ -79,7 +79,6 @@ MCP_COMMUNICATION_FIXES.md
+ SESSION_10_COMPLETE.md
+ TEST_MCP_TOGGLE.md
+ websocket doc.md
+-chrome-extension/public/icon-16.png
+ chrome-extension/public/icon-34 copy.png
+ chrome-extension/public/icon-34.png
+ chrome-extension/src/mcpclient/architecture-option-3-plugin-based.md
+diff --git a/chrome-extension/manifest.ts b/chrome-extension/manifest.ts
+index a8f3fec..5e5b083 100644
+--- a/chrome-extension/manifest.ts
++++ b/chrome-extension/manifest.ts
+@@ -29,6 +29,10 @@ const manifest = {
+   version: packageJson.version,
+   description: 'MCP SuperAssistant',
+   host_permissions: [
++    // Local MCP servers (mcp-chrome bridge on 127.0.0.1:12306). Host permission lets the
++    // extension read the mcp-session-id header and pass local-network-access checks.
++    'http://127.0.0.1/*',
++    'http://localhost/*',
+     '*://*.perplexity.ai/*',
+     '*://*.chat.openai.com/*',
+     '*://*.chatgpt.com/*',
+diff --git a/chrome-extension/src/background/index.ts b/chrome-extension/src/background/index.ts
+index 65c2ca0..1c0e726 100644
+--- a/chrome-extension/src/background/index.ts
++++ b/chrome-extension/src/background/index.ts
+@@ -44,17 +44,17 @@ const logger = createLogger('BACKGROUND');
+ 
+ const DEFAULT_SSE_URL = 'http://localhost:3006/sse';
+ const DEFAULT_WEBSOCKET_URL = 'ws://localhost:3006/message';
+-const DEFAULT_STREAMABLE_HTTP_URL = 'http://localhost:3006';
++const DEFAULT_STREAMABLE_HTTP_URL = 'http://127.0.0.1:12306/mcp'; // mcp-chrome native bridge
+ 
+ // Connection type management
+ type ConnectionType = TransportType;
+-const DEFAULT_CONNECTION_TYPE: ConnectionType = 'sse';
++const DEFAULT_CONNECTION_TYPE: ConnectionType = 'streamable-http';
+ 
+ // Remote Config Manager
+ let remoteConfigManager: RemoteConfigManager | null = null;
+ 
+ // Background script state management with connection type support
+-let serverUrl: string = DEFAULT_SSE_URL;
++let serverUrl: string = DEFAULT_STREAMABLE_HTTP_URL;
+ let connectionType: ConnectionType = DEFAULT_CONNECTION_TYPE;
+ let isConnected: boolean = false;
+ let connectionCount: number = 0;
+@@ -86,7 +86,7 @@ async function initializeServerConfig(): Promise<void> {
+   } catch (error) {
+     logger.warn('[Background] Failed to load server config from storage, using defaults:', error);
+     connectionType = DEFAULT_CONNECTION_TYPE;
+-    serverUrl = DEFAULT_SSE_URL;
++    serverUrl = DEFAULT_STREAMABLE_HTTP_URL;
+     isInitialized = true;
+   }
+ }
+@@ -814,7 +814,7 @@ async function handleMcpMessage(
+ 
+       case 'mcp:get-server-config': {
+         const stored = await chrome.storage.local.get(['mcpServerUrl', 'mcpConnectionType']);
+-        const defaultUrl = connectionType === 'websocket' ? DEFAULT_WEBSOCKET_URL : DEFAULT_SSE_URL;
++        const defaultUrl = connectionType === 'websocket' ? DEFAULT_WEBSOCKET_URL : connectionType === 'streamable-http' ? DEFAULT_STREAMABLE_HTTP_URL : DEFAULT_SSE_URL;
+         result = { 
+           uri: stored.mcpServerUrl || defaultUrl,
+           connectionType: stored.mcpConnectionType || connectionType
+diff --git a/chrome-extension/src/mcpclient/config/defaults.ts b/chrome-extension/src/mcpclient/config/defaults.ts
+index 1c61450..9a2dd26 100644
+--- a/chrome-extension/src/mcpclient/config/defaults.ts
++++ b/chrome-extension/src/mcpclient/config/defaults.ts
+@@ -1,6 +1,6 @@
+ export const DEFAULT_WEBSOCKET_URI = 'ws://localhost:3006/message';
+ export const DEFAULT_SSE_URI = 'http://localhost:3006/sse';
+-export const DEFAULT_STREAMABLE_HTTP_URI = 'http://localhost:3006';
++export const DEFAULT_STREAMABLE_HTTP_URI = 'http://127.0.0.1:12306/mcp';
+ 
+ export const CONNECTION_DEFAULTS = {
+   websocket: {
+diff --git a/pages/content/src/index.ts b/pages/content/src/index.ts
+index cf8a9e0..19ad43d 100644
+--- a/pages/content/src/index.ts
++++ b/pages/content/src/index.ts
+@@ -6,6 +6,20 @@
+  */
+ 
+ import './tailwind-input.css';
++
++// Browser-agent mode: the chat tab is often in the background while tools act on other
++// tabs. Chromium pauses requestAnimationFrame in hidden tabs, which would stall the
++// execute → insert → submit loop, so fall back to timers while hidden.
++{
++  const nativeRAF = window.requestAnimationFrame.bind(window);
++  const nativeCAF = window.cancelAnimationFrame.bind(window);
++  window.requestAnimationFrame = (cb: FrameRequestCallback): number =>
++    document.hidden ? (window.setTimeout(() => cb(performance.now()), 16) as unknown as number) : nativeRAF(cb);
++  window.cancelAnimationFrame = (id: number) => {
++    nativeCAF(id);
++    window.clearTimeout(id);
++  };
++}
+ import { logMessage } from '@src/utils/helpers';
+ import { mcpClient } from './core/mcp-client';
+ import { eventBus } from './events/event-bus';
+diff --git a/pages/content/src/plugins/adapters/gemini.adapter.ts b/pages/content/src/plugins/adapters/gemini.adapter.ts
+index 6c9eb6a..ae3cc98 100644
+--- a/pages/content/src/plugins/adapters/gemini.adapter.ts
++++ b/pages/content/src/plugins/adapters/gemini.adapter.ts
+@@ -252,8 +252,21 @@ export class GeminiAdapter extends BaseAdapterPlugin {
+ 
+     let submitButton: HTMLButtonElement | null = null;
+ 
+-    // Try multiple selectors for better compatibility
++    // Try multiple selectors for better compatibility. Wait (up to 30s) for the button to be
++    // present and enabled: it is disabled while an attachment (e.g. a screenshot) uploads.
+     const selectors = this.getSelector('submitButton').split(', ');
++    const findButton = () => {
++      for (const selector of selectors) {
++        const el = document.querySelector(selector.trim()) as HTMLButtonElement | null;
++        if (el) return el;
++      }
++      return null;
++    };
++    const isBlocked = (el: HTMLButtonElement | null) =>
++      !el || el.disabled || el.getAttribute('aria-disabled') === 'true';
++    for (let waited = 0; isBlocked(findButton()) && waited < 30000; waited += 250) {
++      await new Promise(resolve => setTimeout(resolve, 250));
++    }
+     for (const selector of selectors) {
+       submitButton = document.querySelector(selector.trim()) as HTMLButtonElement;
+       if (submitButton) {
+diff --git a/pages/content/src/render_prescript/src/renderer/components.ts b/pages/content/src/render_prescript/src/renderer/components.ts
+index af6d71a..d5284fb 100644
+--- a/pages/content/src/render_prescript/src/renderer/components.ts
++++ b/pages/content/src/render_prescript/src/renderer/components.ts
+@@ -1388,6 +1388,25 @@ export const displayResult = (
+       resultContent.textContent = rawResultText;
+     }
+ 
++    // Screenshot results (mcp-chrome returns {base64Data, mimeType}) go back to the chat as an
++    // image attachment instead of pasting megabytes of base64 into the prompt.
++    let screenshotFile: File | null = null;
++    try {
++      const parsed = JSON.parse(rawResultText);
++      if (parsed && typeof parsed.base64Data === 'string' && parsed.base64Data.length > 256) {
++        const mime = typeof parsed.mimeType === 'string' ? parsed.mimeType : 'image/jpeg';
++        const bin = atob(parsed.base64Data);
++        const bytes = new Uint8Array(bin.length);
++        for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
++        const ext = mime.split('/')[1] === 'png' ? 'png' : 'jpg';
++        screenshotFile = new File([bytes], `screenshot_call_${callId}.${ext}`, { type: mime });
++        rawResultText = `Screenshot captured; the image is attached to this message as "${screenshotFile.name}".`;
++        resultContent.textContent = rawResultText;
++      }
++    } catch {
++      // not JSON / not a screenshot
++    }
++
+     // Add result to panel
+     resultsPanel.appendChild(resultContent);
+ 
+@@ -1720,10 +1739,19 @@ export const displayResult = (
+       requestAnimationFrame(() => {
+         document.dispatchEvent(
+           new CustomEvent('mcp:tool-execution-complete', {
+-            detail: {
+-              result: wrappedResult,
+-              skipAutoInsertCheck: false
+-            },
++            detail: screenshotFile
++              ? {
++                  file: screenshotFile,
++                  isFileAttachment: true,
++                  fileName: screenshotFile.name,
++                  confirmationText: wrappedResult,
++                  result: wrappedResult,
++                  skipAutoInsertCheck: false,
++                }
++              : {
++                  result: wrappedResult,
++                  skipAutoInsertCheck: false
++                },
+           }),
+         );
+       });
+@@ -1738,5 +1766,15 @@ export const displayResult = (
+     });
+ 
+     resultsPanel.appendChild(resultContent);
++
++    // Feed errors back to the chat too, so the model can recover instead of the loop stalling.
++    const wrappedError = `<function_result call_id="${callId}">\nERROR: ${errorMessage}\n</function_result>`;
++    requestAnimationFrame(() => {
++      document.dispatchEvent(
++        new CustomEvent('mcp:tool-execution-complete', {
++          detail: { result: wrappedError, skipAutoInsertCheck: false },
++        }),
++      );
++    });
+   }
+ };
+diff --git a/pages/content/src/render_prescript/src/renderer/functionBlock.ts b/pages/content/src/render_prescript/src/renderer/functionBlock.ts
+index 5604deb..96746e4 100644
+--- a/pages/content/src/render_prescript/src/renderer/functionBlock.ts
++++ b/pages/content/src/render_prescript/src/renderer/functionBlock.ts
+@@ -1142,13 +1142,24 @@ const AutoExecutionUtils = {
+   findReplacementBlock: (functionDetails: any): HTMLDivElement | null => {
+     const potentialBlocks = document.querySelectorAll<HTMLDivElement>('.function-block');
+     for (const block of potentialBlocks) {
++      let blockFunctionName: string | undefined;
++      let blockCallId: string | undefined;
++
+       const preElement = block.querySelector('pre');
+-      if (!preElement?.textContent) continue;
+-
+-      const match = REGEX_CACHE.invokeMatch.exec(preElement.textContent);
++      const match = preElement?.textContent ? REGEX_CACHE.invokeMatch.exec(preElement.textContent) : null;
+       REGEX_CACHE.invokeMatch.lastIndex = 0;
++      if (match) {
++        blockFunctionName = match[1];
++        blockCallId = match[2];
++      } else {
++        // JSON-format calls (used on Gemini) have no <invoke> tag: read the rendered header instead.
++        // Needed because the chat UI re-renders code blocks after streaming, replacing the
++        // block that auto-execution originally scheduled.
++        blockFunctionName = block.querySelector('.function-name-text')?.textContent?.trim();
++        blockCallId = block.querySelector('.call-id')?.textContent?.trim();
++      }
+ 
+-      if (match && match[1] === functionDetails.functionName && match[2] === functionDetails.callId) {
++      if (blockFunctionName === functionDetails.functionName && blockCallId === functionDetails.callId) {
+         const alreadyExecuted = getPreviousExecution(
+           functionDetails.functionName,
+           functionDetails.callId,
+diff --git a/pages/content/src/stores/connection.store.ts b/pages/content/src/stores/connection.store.ts
+index 19427a5..4a65819 100644
+--- a/pages/content/src/stores/connection.store.ts
++++ b/pages/content/src/stores/connection.store.ts
+@@ -28,8 +28,8 @@ export interface ConnectionState {
+ }
+ 
+ const defaultServerConfig: ServerConfig = {
+-  uri: 'http://localhost:3006/sse', // Default from migration guide, should be configurable
+-  connectionType: 'sse',
++  uri: 'http://127.0.0.1:12306/mcp', // mcp-chrome native bridge (streamable HTTP)
++  connectionType: 'streamable-http',
+   timeout: 5000, // ms
+   retryAttempts: 3,
+   retryDelay: 2000, // ms
+diff --git a/pages/content/src/stores/tool.store.ts b/pages/content/src/stores/tool.store.ts
+index e6a1bc4..5bfecc8 100644
+--- a/pages/content/src/stores/tool.store.ts
++++ b/pages/content/src/stores/tool.store.ts
+@@ -196,7 +196,18 @@ export const useToolStore = create<ToolState>()(
+           
+           // If no stored state and we have available tools, enable all by default
+           if (storedEnabledTools.size === 0 && state.availableTools.length > 0) {
+-            const allToolsEnabled = new Set(state.availableTools.map(tool => tool.name));
++            // Browser-agent default: when the mcp-chrome server is connected, enable only the
++            // core agent tools so the generated instructions fit the chat's input limit
++            // (Gemini truncates at ~32k chars). Others can be re-enabled in the sidebar.
++            const AGENT_TOOLS = [
++              'get_windows_and_tabs', 'chrome_navigate', 'chrome_switch_tab', 'chrome_close_tabs',
++              'chrome_read_page', 'chrome_get_web_content', 'chrome_computer', 'chrome_click_element',
++              'chrome_fill_or_select', 'chrome_keyboard', 'chrome_upload_file', 'chrome_handle_download',
++              'chrome_handle_dialog', 'chrome_javascript',
++            ];
++            const names = state.availableTools.map(tool => tool.name);
++            const isMcpChrome = names.includes('chrome_computer') && names.includes('chrome_read_page');
++            const allToolsEnabled = new Set(isMcpChrome ? names.filter(n => AGENT_TOOLS.includes(n)) : names);
+             set({ enabledTools: allToolsEnabled, isLoadingEnablement: false });
+             // Save the default state
+             await saveToolEnablementState(allToolsEnabled);
+diff --git a/pages/content/src/stores/ui.store.ts b/pages/content/src/stores/ui.store.ts
+index 436b629..3aea1ef 100644
+--- a/pages/content/src/stores/ui.store.ts
++++ b/pages/content/src/stores/ui.store.ts
+@@ -45,20 +45,28 @@ const initialSidebarState: SidebarState = {
+ };
+ 
+ const initialUserPreferences: UserPreferences = {
+-  autoSubmit: false,
+-  autoInsert: false,   // New automation field
+-  autoExecute: false,  // New automation field
++  // Browser-agent mode: execute → insert result → submit, so the chat continues on its own.
++  autoSubmit: true,
++  autoInsert: true,
++  autoExecute: true,
+   notifications: true,
+   theme: 'system', // Default theme
+   language: navigator.language || 'en-US',
+   isPushMode: false,
+   sidebarWidth: 320,
+   isMinimized: false,
+-  customInstructions: '',
+-  customInstructionsEnabled: false,
+-  autoInsertDelay: 2,  // Default delay in seconds
+-  autoExecuteDelay: 2,  // Default delay in seconds
+-  autoSubmitDelay: 2,   // Default delay in seconds
++  customInstructions: `You are operating the user's real Chromium browser through the browser tools. Rules:
++- This chat runs in a gemini.google.com tab; never act on that tab. Tools default to the user's most recent non-Gemini tab. At the start of every new request or follow-up, call get_windows_and_tabs and use only IDs from that fresh result (or the tabId returned by the immediately preceding chrome_navigate); never reuse IDs from earlier turns. If a tool says "Tab not found", refresh the tab list, match by URL/title, and retry with the current ID.
++- Prefer chrome_read_page (refs) to understand a page, then act with chrome_computer / chrome_click_element (double:true for double-click) / chrome_fill_or_select. Use chrome_computer action "type" or chrome_keyboard with a target selector for text entry; chrome_keyboard keys should be named keys/chords (Enter, Tab, Ctrl+A), not prose.
++- Scroll with chrome_computer action "scroll", passing coordinates:{x,y}, scrollDirection:"down" (or up/left/right), and scrollAmount:1-10.
++- Take a screenshot (chrome_computer action "screenshot") only when page text is not enough; the image is returned to the chat.
++- Open or navigate with chrome_navigate (url "back"/"forward" for history), switch tabs with chrome_switch_tab.
++- Upload local files with chrome_upload_file (selector of the file input + absolute filePath). Detect/await downloads with chrome_handle_download.
++- After each function result, immediately continue with the next single function call until the user's task is fully done, then give a short final answer with no function call.`,
++  customInstructionsEnabled: true,
++  autoInsertDelay: 1,  // Default delay in seconds
++  autoExecuteDelay: 1,  // Default delay in seconds
++  autoSubmitDelay: 1,   // Default delay in seconds
+ };
+ 
+ const initialState: Omit<UIState, 'toggleSidebar' | 'toggleMinimize' | 'resizeSidebar' | 'setSidebarVisibility' | 'updatePreferences' | 'addNotification' | 'addRemoteNotification' | 'removeNotification' | 'dismissNotification' | 'clearNotifications' | 'openModal' | 'closeModal' | 'setGlobalLoading' | 'setTheme' | 'setMCPEnabled'> = {

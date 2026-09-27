@@ -1,0 +1,16 @@
+{
+  "name": "gemini-use",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Installer and compatibility patches wiring Gemini web chat to mcp-chrome through MCP SuperAssistant.",
+  "scripts": {
+    "test": "node --test",
+    "install:linux": "bash install.sh",
+    "install:windows": "powershell -NoProfile -ExecutionPolicy Bypass -File ./install.ps1"
+  },
+  "engines": {
+    "node": ">=22.12.0"
+  },
+  "license": "MIT"
+}
