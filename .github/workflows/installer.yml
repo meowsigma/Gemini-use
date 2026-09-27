@@ -19,5 +19,10 @@ jobs:
           version: 9.15.1
       - name: Test installer helpers
         run: node --test
-      - name: Build and register pinned upstream projects
-        run: node install.mjs --workspace "${{ runner.temp }}/gemini-use-test" --no-open
+      - name: Install and register pinned upstream projects (Linux)
+        if: runner.os == 'Linux'
+        run: ./install.sh --workspace "${{ runner.temp }}/gemini-use-test" --no-open
+      - name: Install and register pinned upstream projects (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: powershell -NoProfile -ExecutionPolicy Bypass -File .\install.ps1 --workspace "${{ runner.temp }}\gemini-use-test" --no-open
