@@ -1,11 +1,11 @@
 import { spawnSync } from 'node:child_process';
 import { extensionIdFromPublicKey } from './scripts/extension-id.mjs';
-import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { cpSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-const VERSION = '0.1.0';
+const VERSION = '0.1.1';
 const PNPM_VERSION = '9.15.1';
 const ROOT = path.dirname(fileURLToPath(import.meta.url));
 const CONFIG = {
@@ -183,6 +183,15 @@ function prepareSources(workspace, mcpExtensionId) {
   return { vendorDir, statePath };
 }
 
+function stageMcpInjectionHelpers(mcpDir) {
+  const extensionDir = path.join(mcpDir, 'app', 'chrome-extension');
+  const source = path.join(extensionDir, 'inject-scripts');
+  const target = path.join(extensionDir, 'public', 'inject-scripts');
+  if (!existsSync(source)) throw new Error(`mcp-chrome injection helpers not found: ${source}`);
+  cpSync(source, target, { recursive: true });
+  console.log('Staged internal mcp-chrome injection helpers as extension public assets.');
+}
+
 function buildSources(vendorDir, extensionKey, mcpExtensionId) {
   const ciEnv = { ...process.env, CI: 'true' };
   delete ciEnv.NODE_ENV;
@@ -196,6 +205,7 @@ function buildSources(vendorDir, extensionKey, mcpExtensionId) {
   const mcpDir = path.join(vendorDir, CONFIG.mcpChrome.name);
   const mcpEnv = { ...ciEnv, CHROME_EXTENSION_KEY: extensionKey };
   run('pnpm', ['install', '--frozen-lockfile', '--ignore-scripts'], { cwd: mcpDir, env: mcpEnv });
+  stageMcpInjectionHelpers(mcpDir);
   run('pnpm', ['build'], { cwd: mcpDir, env: mcpEnv });
   run('pnpm', ['--filter', 'mcp-chrome-bridge', 'rebuild', 'better-sqlite3'], { cwd: mcpDir, env: mcpEnv });
 

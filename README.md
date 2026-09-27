@@ -29,7 +29,7 @@ cd Gemini-use
 powershell -NoProfile -ExecutionPolicy Bypass -File .\install.ps1
 ```
 
-The installer checks out pinned upstream commits, applies the small compatibility patches, builds both extensions, and registers the mcp-chrome Native Messaging host for the current user. It keeps the upstream worktrees under `~/.gemini-use/vendor` (Windows: `%USERPROFILE%\.gemini-use\vendor`) and does not overwrite an existing workspace with unknown contents.
+The installer checks out pinned upstream commits, applies the small compatibility patches, builds both extensions, and registers the mcp-chrome Native Messaging host for the current user. It keeps the upstream worktrees under `~/.gemini-use/vendor` (Windows: `%USERPROFILE%\.gemini-use\vendor`) and does not overwrite an existing workspace with unknown contents. If an older install reports a state/version mismatch, move that workspace aside or pass a new `--workspace PATH`; the installer will not destroy it.
 
 ### One-time browser step (required by Chrome/Chromium)
 
