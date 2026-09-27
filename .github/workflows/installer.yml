@@ -21,8 +21,8 @@ jobs:
         run: node --test
       - name: Install and register pinned upstream projects (Linux)
         if: runner.os == 'Linux'
-        run: ./install.sh --workspace "${{ runner.temp }}/gemini-use-test" --no-open
+        run: ./Install-Gemini-use.sh
       - name: Install and register pinned upstream projects (Windows)
         if: runner.os == 'Windows'
-        shell: pwsh
-        run: powershell -NoProfile -ExecutionPolicy Bypass -File .\install.ps1 --workspace "${{ runner.temp }}\gemini-use-test" --no-open
+        shell: cmd
+        run: Install-Gemini-use.cmd --no-open

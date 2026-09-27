@@ -9,9 +9,14 @@ No Gemini API client, LLM backend, separate chat UI, or second browser automatio
 
 ## Install
 
+### Double-click launchers
+
+- **Linux:** double-click `Install-Gemini-use.desktop`. If the desktop asks, choose **Allow Launching** / **Trust and Launch**. It opens a terminal, runs the installer, and leaves the browser setup steps visible. If your file manager does not launch `.desktop` files, right-click `Install-Gemini-use.sh` and choose **Run in Terminal**.
+- **Windows:** double-click `Install-Gemini-use.cmd`. It runs the PowerShell installer and then displays the manual browser steps.
+
 ### Linux
 
-Prerequisites: Git, Node.js **22.12+**, a Chrome/Chromium browser, and an interactive desktop session. The installer bootstraps pnpm 9.15.1 with Corepack or npm when needed.
+Prerequisites: Git, Node.js **22.12+**, Python 3 (for the `.desktop` double-click launcher), a Chrome/Chromium browser, and an interactive desktop session. The installer bootstraps pnpm 9.15.1 with Corepack or npm when needed.
 
 ```bash
 git clone https://github.com/meowsigma/Gemini-use.git

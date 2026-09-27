@@ -1,2 +1,5 @@
 # Unified diff context lines intentionally end in one space; those spaces are patch syntax.
 patches/*.patch whitespace=-blank-at-eol,-blank-at-eof
+
+# Keep Windows batch launchers CRLF while treating CR as the expected line ending.
+*.cmd text eol=crlf whitespace=cr-at-eol

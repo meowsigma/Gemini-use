@@ -1,0 +1,10 @@
+[Desktop Entry]
+Version=1.0
+Type=Application
+Name=Install Gemini-use
+Comment=Build the browser extensions and explain the one-time Chrome setup
+Exec=python3 -c "import os,sys,urllib.parse,subprocess; p=urllib.parse.unquote(urllib.parse.urlparse(sys.argv[1]).path); sys.exit(subprocess.call([os.path.join(os.path.dirname(p),'Install-Gemini-use.sh')]))" %k
+Icon=utilities-terminal
+Terminal=true
+Categories=Utility;
+StartupNotify=true
